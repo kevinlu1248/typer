@@ -92,18 +92,29 @@ class DefaultFactoryAndDefaultValueError(Exception):
         )
 
 
-def _split_annotation_from_typer_annotations(
-    base_annotation: Type[Any],
-) -> Tuple[Type[Any], List[ParameterInfo]]:
-    if get_origin(base_annotation) is not Annotated:  # type: ignore
-        return base_annotation, []
-    base_annotation, *maybe_typer_annotations = get_args(base_annotation)
-    return base_annotation, [
-        annotation
-        for annotation in maybe_typer_annotations
-        if isinstance(annotation, ParameterInfo)
-    ]
+class EmailStrError(Exception):
+    argument_name: str
 
+    def __init__(self, argument_name: str):
+        self.argument_name = argument_name
+
+    def __str__(self) -> str:
+        return (
+            "Invalid email string"
+            f" for {self.argument_name!r}"
+        )
+
+class HttpUrlError(Exception):
+    argument_name: str
+
+    def __init__(self, argument_name: str):
+        self.argument_name = argument_name
+
+    def __str__(self) -> str:
+        return (
+            "Invalid HTTP URL"
+            f" for {self.argument_name!r}"
+        )
 
 def get_params_from_function(func: Callable[..., Any]) -> Dict[str, ParamMeta]:
     signature = inspect.signature(func)
@@ -118,10 +129,7 @@ def get_params_from_function(func: Callable[..., Any]) -> Dict[str, ParamMeta]:
 
         default = param.default
         if typer_annotations:
-            # It's something like `my_param: Annotated[str, Argument()]`
             [parameter_info] = typer_annotations
-
-            # Forbid `my_param: Annotated[str, Argument()] = Argument("...")`
             if isinstance(param.default, ParameterInfo):
                 raise MixedAnnotatedAndDefaultStyleError(
                     argument_name=param.name,
@@ -130,15 +138,6 @@ def get_params_from_function(func: Callable[..., Any]) -> Dict[str, ParamMeta]:
                 )
 
             parameter_info = copy(parameter_info)
-
-            # When used as a default, `Option` takes a default value and option names
-            # as positional arguments:
-            #   `Option(some_value, "--some-argument", "-s")`
-            # When used in `Annotated` (ie, what this is handling), `Option` just takes
-            # option names as positional arguments:
-            #   `Option("--some-argument", "-s")`
-            # In this case, the `default` attribute of `parameter_info` is actually
-            # meant to be the first item of `param_decls`.
             if (
                 isinstance(parameter_info, OptionInfo)
                 and parameter_info.default is not ...
@@ -148,31 +147,19 @@ def get_params_from_function(func: Callable[..., Any]) -> Dict[str, ParamMeta]:
                     *(parameter_info.param_decls or ()),
                 )
                 parameter_info.default = ...
-
-            # Forbid `my_param: Annotated[str, Argument('some-default')]`
             if parameter_info.default is not ...:
                 raise AnnotatedParamWithDefaultValueError(
                     param_type=type(parameter_info),
                     argument_name=param.name,
                 )
             if param.default is not param.empty:
-                # Put the parameter's default (set by `=`) into `parameter_info`, where
-                # typer can find it.
                 parameter_info.default = param.default
-
             default = parameter_info
         elif param.name in type_hints:
-            # Resolve forward references.
             annotation = type_hints[param.name]
 
         if isinstance(default, ParameterInfo):
             parameter_info = copy(default)
-            # Click supports `default` as either
-            # - an actual value; or
-            # - a factory function (returning a default value.)
-            # The two are not interchangeable for static typing, so typer allows
-            # specifying `default_factory`. Move the `default_factory` into `default`
-            # so click can find it.
             if parameter_info.default is ... and parameter_info.default_factory:
                 parameter_info.default = parameter_info.default_factory
             elif parameter_info.default_factory:
@@ -180,6 +167,11 @@ def get_params_from_function(func: Callable[..., Any]) -> Dict[str, ParamMeta]:
                     argument_name=param.name, param_type=type(parameter_info)
                 )
             default = parameter_info
+
+        if annotation is EmailStr and not validate_email_str(default):
+            raise EmailStrError(param.name)
+        if annotation is HttpUrl and not validate_http_url(default):
+            raise HttpUrlError(param.name)
 
         params[param.name] = ParamMeta(
             name=param.name, default=default, annotation=annotation
