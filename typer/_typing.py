@@ -131,10 +131,12 @@ else:
         """
         if type(tp).__name__ in AnnotatedTypeNames:
             return cast(Type[Any], Annotated)  # mypy complains about _SpecialForm
+    def get_origin(tp: Type[Any]) -> Optional[Type[Any]]:
+        if tp is EmailStr or tp is HttpUrl:
+            return tp
+        if type(tp).__name__ in AnnotatedTypeNames:
+            return cast(Type[Any], Annotated)  # mypy complains about _SpecialForm
         return _typing_get_origin(tp) or getattr(tp, "__origin__", None)
-
-
-if sys.version_info < (3, 7):  # noqa: C901 (ignore complexity)
 
     def get_args(t: Type[Any]) -> Tuple[Any, ...]:
         """Simplest get_args compatibility layer possible.
@@ -150,51 +152,11 @@ if sys.version_info < (3, 7):  # noqa: C901 (ignore complexity)
         return getattr(t, "__args__", ())
 
 elif sys.version_info < (3, 8):  # noqa: C901
-    from typing import _GenericAlias
-
-    def get_args(t: Type[Any]) -> Tuple[Any, ...]:
-        """Compatibility version of get_args for python 3.7.
-
-        Mostly compatible with the python 3.8 `typing` module version
-        and able to handle almost all use cases.
-        """
-        if type(t).__name__ in AnnotatedTypeNames:
-            return t.__args__ + t.__metadata__
-        if isinstance(t, _GenericAlias):
-            res = t.__args__
-            if t.__origin__ is Callable and res and res[0] is not Ellipsis:
-                res = (list(res[:-1]), res[-1])
-            return res
-        return getattr(t, "__args__", ())
-
-else:
-    from typing import get_args as _typing_get_args
-
-    def _generic_get_args(tp: Type[Any]) -> Tuple[Any, ...]:
-        """
-        In python 3.9, `typing.Dict`, `typing.List`, ...
-        do have an empty `__args__` by default (instead of the generic ~T for example).
-        In order to still support `Dict` for example and consider it as `Dict[Any, Any]`,
-        we retrieve the `_nparams` value that tells us how many parameters it needs.
-        """
-        if hasattr(tp, "_nparams"):
-            return (Any,) * tp._nparams
-        return ()
-
     def get_args(tp: Type[Any]) -> Tuple[Any, ...]:
-        """Get type arguments with all substitutions performed.
-
-        For unions, basic simplifications used by Union constructor are performed.
-        Examples::
-            get_args(Dict[str, int]) == (str, int)
-            get_args(int) == ()
-            get_args(Union[int, Union[T, int], str][int]) == (int, str)
-            get_args(Union[int, Tuple[T, int]][str]) == (int, Tuple[str, int])
-            get_args(Callable[[], T][int]) == ([], int)
-        """
+        if tp is EmailStr or tp is HttpUrl:
+            return ()
         if type(tp).__name__ in AnnotatedTypeNames:
             return tp.__args__ + tp.__metadata__
-        # the fallback is needed for the same reasons as `get_origin` (see above)
         return (
             _typing_get_args(tp) or getattr(tp, "__args__", ()) or _generic_get_args(tp)
         )
@@ -445,29 +407,14 @@ def resolve_annotations(
     return annotations
 
 
+    def is_callable_type(type_: Type[Any]) -> bool:
+        return type_ is Callable or get_origin(type_) is Callable or type_ is EmailStr or type_ is HttpUrl
 def is_callable_type(type_: Type[Any]) -> bool:
     return type_ is Callable or get_origin(type_) is Callable
 
 
-if sys.version_info >= (3, 7):
-
     def is_literal_type(type_: Type[Any]) -> bool:
-        return Literal is not None and get_origin(type_) is Literal
-
-    def literal_values(type_: Type[Any]) -> Tuple[Any, ...]:
-        return get_args(type_)
-
-else:
-
-    def is_literal_type(type_: Type[Any]) -> bool:
-        return (
-            Literal is not None
-            and hasattr(type_, "__values__")
-            and type_ == Literal[type_.__values__]
-        )
-
-    def literal_values(type_: Type[Any]) -> Tuple[Any, ...]:
-        return type_.__values__
+        return Literal is not None and get_origin(type_) is Literal or type_ is EmailStr or type_ is HttpUrl
 
 
 def all_literal_values(type_: Type[Any]) -> Tuple[Any, ...]:
@@ -618,14 +565,3 @@ def get_class(type_: Type[Any]) -> Union[None, bool, Type[Any]]:
 
 
 def get_sub_types(tp: Any) -> List[Any]:
-    """
-    Return all the types that are allowed by type `tp`
-    `tp` can be a `Union` of allowed types or an `Annotated` type
-    """
-    origin = get_origin(tp)
-    if origin is Annotated:
-        return get_sub_types(get_args(tp)[0])
-    elif is_union(origin):
-        return [x for t in get_args(tp) for x in get_sub_types(t)]
-    else:
-        return [tp]
