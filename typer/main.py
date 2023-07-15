@@ -14,6 +14,7 @@ from uuid import UUID
 import click
 
 from .completion import get_completion_inspect_parameters
+from pydantic import EmailStr, HttpUrl
 from .core import MarkupMode, TyperArgument, TyperCommand, TyperGroup, TyperOption
 from .models import (
     AnyType,
@@ -723,6 +724,10 @@ def get_click_type(
         return click.UUID
     elif annotation == datetime:
         return click.DateTime(formats=parameter_info.formats)
+    elif annotation == EmailStr:
+        return click.STRING
+    elif annotation == HttpUrl:
+        return click.STRING
     elif (
         annotation == Path
         or parameter_info.allow_dash
